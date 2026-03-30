@@ -21,6 +21,8 @@ CODEX_SKILLS="$HOME/.codex/skills"
 CODEX_GSTACK="$CODEX_SKILLS/gstack"
 FACTORY_SKILLS="$HOME/.factory/skills"
 FACTORY_GSTACK="$FACTORY_SKILLS/gstack"
+CODEBUDDY_SKILLS="$HOME/.codebuddy/skills"
+CODEBUDDY_GSTACK="$CODEBUDDY_SKILLS/gstack"
 
 IS_WINDOWS=0
 case "$(uname -s)" in
@@ -34,7 +36,7 @@ SKILL_PREFIX=1
 SKILL_PREFIX_FLAG=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --host) [ -z "$2" ] && echo "Missing value for --host (expected claude, codex, kiro, or auto)" >&2 && exit 1; HOST="$2"; shift 2 ;;
+    --host) [ -z "$2" ] && echo "Missing value for --host (expected claude, codex, kiro, codebuddy, or auto)" >&2 && exit 1; HOST="$2"; shift 2 ;;
     --host=*) HOST="${1#--host=}"; shift ;;
     --local) LOCAL_INSTALL=1; shift ;;
     --prefix)    SKILL_PREFIX=1; SKILL_PREFIX_FLAG=1; shift ;;
@@ -44,8 +46,8 @@ while [ $# -gt 0 ]; do
 done
 
 case "$HOST" in
-  claude|codex|kiro|factory|auto) ;;
-  *) echo "Unknown --host value: $HOST (expected claude, codex, kiro, factory, or auto)" >&2; exit 1 ;;
+  claude|codex|kiro|codebuddy|factory|auto) ;;
+  *) echo "Unknown --host value: $HOST (expected claude, codex, kiro, codebuddy, factory, or auto)" >&2; exit 1 ;;
 esac
 
 # ─── Resolve skill prefix preference ─────────────────────────
@@ -103,14 +105,16 @@ fi
 INSTALL_CLAUDE=0
 INSTALL_CODEX=0
 INSTALL_KIRO=0
+INSTALL_CODEBUDDY=0
 INSTALL_FACTORY=0
 if [ "$HOST" = "auto" ]; then
   command -v claude >/dev/null 2>&1 && INSTALL_CLAUDE=1
   command -v codex >/dev/null 2>&1 && INSTALL_CODEX=1
   command -v kiro-cli >/dev/null 2>&1 && INSTALL_KIRO=1
+  command -v codebuddy >/dev/null 2>&1 && INSTALL_CODEBUDDY=1
   command -v droid >/dev/null 2>&1 && INSTALL_FACTORY=1
   # If none found, default to claude
-  if [ "$INSTALL_CLAUDE" -eq 0 ] && [ "$INSTALL_CODEX" -eq 0 ] && [ "$INSTALL_KIRO" -eq 0 ] && [ "$INSTALL_FACTORY" -eq 0 ]; then
+  if [ "$INSTALL_CLAUDE" -eq 0 ] && [ "$INSTALL_CODEX" -eq 0 ] && [ "$INSTALL_KIRO" -eq 0 ] && [ "$INSTALL_CODEBUDDY" -eq 0 ] && [ "$INSTALL_FACTORY" -eq 0 ]; then
     INSTALL_CLAUDE=1
   fi
 elif [ "$HOST" = "claude" ]; then
@@ -119,6 +123,8 @@ elif [ "$HOST" = "codex" ]; then
   INSTALL_CODEX=1
 elif [ "$HOST" = "kiro" ]; then
   INSTALL_KIRO=1
+elif [ "$HOST" = "codebuddy" ]; then
+  INSTALL_CODEBUDDY=1
 elif [ "$HOST" = "factory" ]; then
   INSTALL_FACTORY=1
 fi
@@ -658,7 +664,63 @@ if [ "$INSTALL_KIRO" -eq 1 ]; then
   fi
 fi
 
-# 6b. Install for Factory Droid
+# 6b. Install for CodeBuddy (copy from .agents/skills, rewrite paths)
+if [ "$INSTALL_CODEBUDDY" -eq 1 ]; then
+  CODEBUDDY_SKILLS="$HOME/.codebuddy/skills"
+  AGENTS_DIR="$SOURCE_GSTACK_DIR/.agents/skills"
+  mkdir -p "$CODEBUDDY_SKILLS"
+
+  # Create gstack dir with symlinks for runtime assets, copy+sed for SKILL.md
+  CODEBUDDY_GSTACK="$CODEBUDDY_SKILLS/gstack"
+  # Remove old whole-dir symlink from previous installs
+  [ -L "$CODEBUDDY_GSTACK" ] && rm -f "$CODEBUDDY_GSTACK"
+  mkdir -p "$CODEBUDDY_GSTACK" "$CODEBUDDY_GSTACK/browse" "$CODEBUDDY_GSTACK/gstack-upgrade" "$CODEBUDDY_GSTACK/review"
+  ln -snf "$SOURCE_GSTACK_DIR/bin" "$CODEBUDDY_GSTACK/bin"
+  ln -snf "$SOURCE_GSTACK_DIR/browse/dist" "$CODEBUDDY_GSTACK/browse/dist"
+  ln -snf "$SOURCE_GSTACK_DIR/browse/bin" "$CODEBUDDY_GSTACK/browse/bin"
+  # ETHOS.md — referenced by "Search Before Building" in all skill preambles
+  if [ -f "$SOURCE_GSTACK_DIR/ETHOS.md" ]; then
+    ln -snf "$SOURCE_GSTACK_DIR/ETHOS.md" "$CODEBUDDY_GSTACK/ETHOS.md"
+  fi
+  # gstack-upgrade skill
+  if [ -f "$AGENTS_DIR/gstack-upgrade/SKILL.md" ]; then
+    ln -snf "$AGENTS_DIR/gstack-upgrade/SKILL.md" "$CODEBUDDY_GSTACK/gstack-upgrade/SKILL.md"
+  fi
+  # Review runtime assets (individual files, not whole dir)
+  for f in checklist.md design-checklist.md greptile-triage.md TODOS-format.md; do
+    if [ -f "$SOURCE_GSTACK_DIR/review/$f" ]; then
+      ln -snf "$SOURCE_GSTACK_DIR/review/$f" "$CODEBUDDY_GSTACK/review/$f"
+    fi
+  done
+
+  # Rewrite root SKILL.md paths for CodeBuddy
+  sed -e "s|~/.claude/skills/gstack|~/.codebuddy/skills/gstack|g" \
+      -e "s|\.claude/skills/gstack|.codebuddy/skills/gstack|g" \
+      -e "s|\.claude/skills|.codebuddy/skills|g" \
+      "$SOURCE_GSTACK_DIR/SKILL.md" > "$CODEBUDDY_GSTACK/SKILL.md"
+
+  if [ ! -d "$AGENTS_DIR" ]; then
+    echo "  warning: no .agents/skills/ directory found — run 'bun run build' first" >&2
+  else
+    for skill_dir in "$AGENTS_DIR"/gstack*/; do
+      [ -f "$skill_dir/SKILL.md" ] || continue
+      skill_name="$(basename "$skill_dir")"
+      target_dir="$CODEBUDDY_SKILLS/$skill_name"
+      mkdir -p "$target_dir"
+      # Generated Codex skills use $HOME/.codex (not ~/), plus $GSTACK_ROOT variables.
+      # Rewrite the default GSTACK_ROOT value and any remaining literal paths.
+      sed -e 's|\$HOME/.codex/skills/gstack|$HOME/.codebuddy/skills/gstack|g' \
+          -e "s|~/.codex/skills/gstack|~/.codebuddy/skills/gstack|g" \
+          -e "s|~/.claude/skills/gstack|~/.codebuddy/skills/gstack|g" \
+          "$skill_dir/SKILL.md" > "$target_dir/SKILL.md"
+    done
+    echo "gstack ready (codebuddy)."
+    echo "  browse: $BROWSE_BIN"
+    echo "  codebuddy skills: $CODEBUDDY_SKILLS"
+  fi
+fi
+
+# 6c. Install for Factory Droid
 if [ "$INSTALL_FACTORY" -eq 1 ]; then
   mkdir -p "$FACTORY_SKILLS"
   create_factory_runtime_root "$SOURCE_GSTACK_DIR" "$FACTORY_GSTACK"
